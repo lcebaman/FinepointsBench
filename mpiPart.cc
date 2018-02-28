@@ -7,6 +7,7 @@
 #include <mpi.h>
 #include <assert.h>
 #include <stdio.h>
+#include <math.h>
 
 #define PRINTF(args,...)  printf( args, ##__VA_ARGS__ )
 //#define PRINTF(args,...)
@@ -48,6 +49,7 @@ struct Info {
   MPI_Comm comm;
   int isSend;
 };
+
 #ifdef MPICH
 
 std::map<MPI_Request*,Info*> _infoMap;
@@ -84,8 +86,8 @@ int MPI_Partitioned_Send_create(const void *buf, int count, MPI_Datatype datatyp
 
   rc = MPI_Comm_rank( MPI_COMM_WORLD, &info->myRank );
   MPI_Type_size(datatype,&dataTypeSize);
-  info->chunkSize = count/numThreads;
-  info->leftover = count - numThreads*(info->chunkSize);
+  info->chunkSize = (int)ceil((double)count/(double)numThreads);
+  info->leftover = numThreads*(info->chunkSize) - count;
 
   PRINTF("%s(): rank=%d numThreads=%d count=%d  chunkSize=%d lefotver=%d enter \n",
          __func__,info->myRank,numThreads,count,info->chunkSize,info->leftover);
@@ -164,6 +166,50 @@ int MPI_Partitioned_Add_to_buffer( MPI_Request* request, const void* send_buf,
   int index = getMyIndex();
   MPI_Aint displacement = index * info->chunkSize;
 
+  // PRINTF("%s():%d: rank=%d tid=%d count=%d displacement=%lu\n",
+  //        __func__,__LINE__,info->myRank, index, count, displacement);
+  
+  if(displacement + count > info->count)
+    count = info->count - (info->chunkSize*(info->numThreads-1));
+  
+  PRINTF("%s():%d: rank=%d tid=%d count=%d displacement=%d buffSize=%d chunk=%d lu\n",
+         __func__,__LINE__,info->myRank, index, count, displacement,info->count,info->chunkSize);
+  
+  rc = MPI_Put( send_buf, count, datatype, 1, displacement, count, datatype, info->win );
+  assert( rc == MPI_SUCCESS );
+  
+#pragma omp critical
+  {
+    numSent = ++info->numSent;
+  }
+  
+  PRINTF("%s():%d: rank=%d tid=%d numSent=%d numThreads=%d\n",
+         __func__,__LINE__,info->myRank, index, info->numSent, info->numThreads);
+  
+  if ( info->numThreads == numSent ) {
+    
+    PRINTF("%s():%d: rank=%d done\n",__func__,__LINE__,info->myRank);
+
+    rc = MPI_Win_unlock_all( info->win );
+    assert( rc == MPI_SUCCESS );
+
+    rc = MPI_Send( NULL, 0, MPI_CHAR, 1, info->tag, info->comm );
+    assert( rc == MPI_SUCCESS );
+  }
+
+  PRINTF("%s():%d: rank=%d return\n",__func__,__LINE__,info->myRank);
+  return MPI_SUCCESS;
+}
+
+int MPI_Partitioned_Add_to_buffer_a( MPI_Request* request, const void* send_buf,
+                                     int count, MPI_Datatype datatype )
+{
+  int numSent;
+  int rc;
+  struct Info* info = getInfo(request);
+  int index = getMyIndex();
+  MPI_Aint displacement = index * info->chunkSize;
+
   PRINTF("%s():%d: rank=%d tid=%d count=%d displacement=%lu\n",
          __func__,__LINE__,info->myRank, index, count, displacement);
 
@@ -182,6 +228,14 @@ int MPI_Partitioned_Add_to_buffer( MPI_Request* request, const void* send_buf,
 
     PRINTF("%s():%d: rank=%d done\n",__func__,__LINE__,info->myRank);
 
+    if(info->leftover){
+      rc = MPI_Put( send_buf, info->leftover, datatype, 1, info->chunkSize*info->numThreads,
+                    info->leftover, datatype, info->win );
+      assert( rc == MPI_SUCCESS );
+      PRINTF("tid=%d sent leftover data of size %d to location %d\n",
+	     index,info->leftover,info->chunkSize*info->numThreads);
+    }
+
     rc = MPI_Win_unlock_all( info->win );
     assert( rc == MPI_SUCCESS );
 
@@ -192,7 +246,8 @@ int MPI_Partitioned_Add_to_buffer( MPI_Request* request, const void* send_buf,
   PRINTF("%s():%d: rank=%d return\n",__func__,__LINE__,info->myRank);
   return MPI_SUCCESS;
 }
-int MPI_Partitioned_Add_to_buffer_a( MPI_Request* request, const void* send_buf,
+
+int MPI_Partitioned_Add_to_buffer_b( MPI_Request* request, const void* send_buf,
                                      int count, MPI_Datatype datatype )
 {
   int numSent;

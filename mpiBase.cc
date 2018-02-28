@@ -48,8 +48,8 @@ int main( int argc, char* argv[] )
   args.numIterations = 1;
   args.minNumThreads = 2;
   args.maxNumThreads = 1;
-  args.minBuffSize = 1021;
-  args.maxBuffSize = 1021;
+  args.minBuffSize = 12421;
+  args.maxBuffSize = 12421;
   args.compTime = 0.050;
   args.noise = 0.002;
 

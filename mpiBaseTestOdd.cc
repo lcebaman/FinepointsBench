@@ -10,9 +10,11 @@
 #include <cstdlib>
 #include <random>
 #include <ctime>
+#include <math.h>
 
 //#define VERIFY 1
-double doTestOdd( int rank, int numIterations, char* sendBuf, char* recvBuf, int numThreads,
+double doTestOdd( int rank, int numIterations, char* sendBuf, 
+		  char* recvBuf, int numThreads,
 		  size_t bufSize, double compTime, double noise )
 {
   
@@ -21,15 +23,15 @@ double doTestOdd( int rank, int numIterations, char* sendBuf, char* recvBuf, int
   double start;
   int TAG = 0xdead;
   int rc;
-
-  size_t threadPart = bufSize/numThreads;
+  
+  size_t threadPart = (int)ceil((double)bufSize/(double)numThreads);
   
 #ifdef VERIFY
-  for ( int i = 0; i < (threadPart * numThreads) / 8; i++ ) {
+  for ( int i = 0; i < (bufSize) / 8; i++ ) {
     ((uint64_t*)sendBuf)[i] = i;
   }
 
-  bzero( recvBuf, threadPart * numThreads );
+  bzero( recvBuf, bufSize );
 #endif
   
 
@@ -84,7 +86,7 @@ double doTestOdd( int rank, int numIterations, char* sendBuf, char* recvBuf, int
         if ( 0  !=  rc ) {
           printf("rc=%s rem %li\n",strerror(rc),rem.tv_nsec);
         }
-        rc = MPI_Partitioned_Add_to_buffer_a( &sendReq, sendBuf + (threadPart * tid),
+        rc = MPI_Partitioned_Add_to_buffer( &sendReq, sendBuf + (threadPart * tid),
 					    threadPart, MPI_CHAR );
         assert( rc  == MPI_SUCCESS );
 
@@ -92,26 +94,29 @@ double doTestOdd( int rank, int numIterations, char* sendBuf, char* recvBuf, int
       }
 
       if ( 1 == rank ) {
+	
 #pragma omp master
         {
           rc = MPI_Wait_part(&recvReq, MPI_STATUS_IGNORE );
           assert( rc == MPI_SUCCESS );
 #ifdef VERIFY
-          for ( int i = 0; i < (threadPart * numThreads) / 8; i++ ) {
+          for ( int i = 0; i < (bufSize) / 8; i++ ) {
             assert( ((uint64_t*)recvBuf)[i] == i );
           }
-          bzero( recvBuf, threadPart * numThreads );
+          bzero( recvBuf, bufSize );
 #endif
         }
       }
     }
   }
+
+  
   if ( 0 == rank ) {
     MPI_Partitioned_free( &sendReq );
   } else {
     MPI_Partitioned_free( &recvReq );
   }
-
+  
   double duration = MPI_Wtime() - start;
   if ( numThreads > 1 ) {
     duration -=  sleepPlus / 1000000000.0 * numIterations;
